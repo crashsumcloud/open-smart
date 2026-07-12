@@ -21,6 +21,10 @@ class AudioConfig:
 StatusCallback = Callable[[sd.CallbackFlags], None]
 
 
+class AudioDeviceError(RuntimeError):
+    """Raised when an input device cannot satisfy the analyzer requirements."""
+
+
 class AudioInputEngine:
     """Single-device, multi-channel input stream feeding an AudioRingBuffer."""
 
@@ -40,6 +44,7 @@ class AudioInputEngine:
     def start(self) -> None:
         if self._stream is not None:
             return
+        validate_input_settings(self.config)
         self._stream = sd.InputStream(
             samplerate=self.config.sample_rate,
             blocksize=self.config.block_size,
@@ -80,3 +85,50 @@ def list_input_devices() -> list[dict[str, object]]:
                 }
             )
     return result
+
+
+def format_input_devices(required_channels: int = 2, sample_rate: int = 48_000) -> str:
+    lines = []
+    for device in list_input_devices():
+        marker = "*" if int(device["max_input_channels"]) >= required_channels else " "
+        lines.append(
+            f"{marker} {device['index']}: {device['name']} "
+            f"({device['max_input_channels']} in, default {device['default_samplerate']} Hz)"
+        )
+    heading = f"* = has at least {required_channels} input channels. Requested sample rate: {sample_rate} Hz."
+    return heading + "\n" + "\n".join(lines)
+
+
+def validate_input_settings(config: AudioConfig) -> None:
+    if config.device is None:
+        raise AudioDeviceError(
+            "No input device selected. Run `python -m open_smart.app --list-devices`, "
+            "then launch with `--device INDEX` for a two-channel input."
+        )
+
+    try:
+        device_info = sd.query_devices(config.device, kind="input")
+    except Exception as exc:
+        raise AudioDeviceError(f"Could not query input device {config.device!r}: {exc}") from exc
+
+    max_inputs = int(device_info.get("max_input_channels", 0))
+    if max_inputs < config.channels:
+        name = device_info.get("name", config.device)
+        raise AudioDeviceError(
+            f"Input device {name!r} has {max_inputs} input channel(s), "
+            f"but Open-Smaart needs {config.channels} synchronous input channels."
+        )
+
+    try:
+        sd.check_input_settings(
+            device=config.device,
+            channels=config.channels,
+            samplerate=config.sample_rate,
+            dtype="float32",
+        )
+    except Exception as exc:
+        name = device_info.get("name", config.device)
+        raise AudioDeviceError(
+            f"Input device {name!r} cannot open {config.channels} channel(s) "
+            f"at {config.sample_rate} Hz: {exc}"
+        ) from exc

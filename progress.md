@@ -22,12 +22,15 @@
 * `compute_transfer` calculates complex response, magnitude, phase, and coherence.
 * `AnalyzerWindow` renders magnitude, phase, coherence, delay, levels, and overflow status with PySide6/PyQtGraph on a 33 ms timer.
 * Tests cover ring buffer wrapping, delay estimation, transfer gain, and analyzer orchestration.
+* Audio startup now requires an explicit input device and includes `--check-audio` preflight validation.
 
 ### Next Immediate Technical Actions
 * Validate `python -m open_smart.app --list-devices` and live streaming on a machine with a working PortAudio host/audio interface.
+* On this host, device `45` passed `--check-audio`; test live GUI with `python -m open_smart.app --device 45`.
 * Add user controls for device selection, averaging alpha, delay hold/reset, and capture start/stop.
 * Improve coherence by averaging auto/cross spectra across analysis frames instead of using a single-frame estimate.
 
 ### Discovered Roadblocks & Solutions
 * `gh repo create` needed escalated network access and Git `safe.directory` because the sandbox and Windows user have different repository ownership.
 * `python -m open_smart.app --list-devices` timed out in this environment while querying audio devices; needs validation on the target hardware host.
+* Windows default input device selection was unreliable; require explicit `--device INDEX`.

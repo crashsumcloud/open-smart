@@ -8,7 +8,7 @@ import pyqtgraph as pg
 from PySide6 import QtCore, QtWidgets
 
 from .analyzer import AnalyzerConfig, TransferAnalyzer
-from .audio_io import AudioConfig, AudioInputEngine, list_input_devices
+from .audio_io import AudioConfig, AudioDeviceError, AudioInputEngine, format_input_devices, validate_input_settings
 
 
 class AnalyzerWindow(QtWidgets.QMainWindow):
@@ -106,17 +106,14 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--sample-rate", type=int, default=48_000)
     parser.add_argument("--block-size", type=int, default=512)
     parser.add_argument("--list-devices", action="store_true")
+    parser.add_argument("--check-audio", action="store_true", help="Validate the selected input device and exit")
     return parser.parse_args(argv)
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(sys.argv[1:] if argv is None else argv)
     if args.list_devices:
-        for device in list_input_devices():
-            print(
-                f"{device['index']}: {device['name']} "
-                f"({device['max_input_channels']} in, default {device['default_samplerate']} Hz)"
-            )
+        print(format_input_devices(sample_rate=args.sample_rate))
         return 0
 
     device: int | str | None
@@ -129,13 +126,33 @@ def main(argv: list[str] | None = None) -> int:
             device = args.device
 
     audio_config = AudioConfig(sample_rate=args.sample_rate, block_size=args.block_size, device=device)
+    if args.check_audio:
+        try:
+            validate_input_settings(audio_config)
+        except AudioDeviceError as exc:
+            print(f"Audio device check failed: {exc}", file=sys.stderr)
+            print("\nAvailable input devices:", file=sys.stderr)
+            print(format_input_devices(sample_rate=args.sample_rate), file=sys.stderr)
+            return 2
+        print("Audio device check passed.")
+        return 0
+
     analyzer = TransferAnalyzer(AnalyzerConfig(sample_rate=args.sample_rate))
     audio = AudioInputEngine(audio_config)
 
     app = QtWidgets.QApplication(sys.argv[:1])
     window = AnalyzerWindow(audio, analyzer)
     window.show()
-    window.start()
+    try:
+        window.start()
+    except AudioDeviceError as exc:
+        QtWidgets.QMessageBox.critical(
+            window,
+            "Audio Device Error",
+            f"{exc}\n\nRun `python -m open_smart.app --list-devices`, then launch with `--device INDEX`.",
+        )
+        audio.stop()
+        return 2
     return app.exec()
 
 

@@ -16,4 +16,14 @@ python -m venv .venv
 open-smart
 ```
 
-Use `open-smart --list-devices` to inspect available audio devices.
+Use `python -m open_smart.app --list-devices` to inspect available audio devices, then launch with an explicit two-channel input:
+
+```powershell
+python -m open_smart.app --device 45
+```
+
+Use `--check-audio` to validate a device before opening the GUI:
+
+```powershell
+python -m open_smart.app --device 45 --check-audio
+```
