@@ -7,15 +7,20 @@ import numpy as np
 import pyqtgraph as pg
 from PySide6 import QtCore, QtWidgets
 
+from .acoustics import compute_spl_metrics, estimate_rt60
 from .analyzer import AnalyzerConfig, TransferAnalyzer
 from .audio_io import AudioConfig, AudioDeviceError, AudioInputEngine, format_input_devices, validate_input_settings
+from .capture import save_noise_floor, save_rt60, save_transfer
+from .signals import AudioOutputEngine, SignalConfig, SignalGenerator
 
 
 class AnalyzerWindow(QtWidgets.QMainWindow):
-    def __init__(self, audio: AudioInputEngine, analyzer: TransferAnalyzer) -> None:
+    def __init__(self, audio: AudioInputEngine, analyzer: TransferAnalyzer, output: AudioOutputEngine | None = None) -> None:
         super().__init__()
         self.audio = audio
         self.analyzer = analyzer
+        self.output = output
+        self.last_result = None
         self.setWindowTitle("Open-Smaart Transfer Analyzer")
         self.resize(1280, 820)
 
@@ -31,6 +36,48 @@ class AnalyzerWindow(QtWidgets.QMainWindow):
         self.metrics = QtWidgets.QLabel("SPL(A): -- | RT60: -- | Setup: waiting for signal")
         self.metrics.setMinimumHeight(26)
         layout.addWidget(self.metrics)
+
+        controls = QtWidgets.QHBoxLayout()
+        layout.addLayout(controls)
+
+        self.measurement_name = QtWidgets.QLineEdit("Room")
+        self.measurement_name.setPlaceholderText("Measurement name")
+        controls.addWidget(self.measurement_name, stretch=2)
+
+        self.signal_type = QtWidgets.QComboBox()
+        self.signal_type.addItems(["pink", "white", "sine", "sweep"])
+        self.signal_type.currentTextChanged.connect(self._set_signal_type)
+        controls.addWidget(self.signal_type)
+
+        self.level = QtWidgets.QSpinBox()
+        self.level.setRange(-60, -3)
+        self.level.setValue(-18)
+        self.level.setSuffix(" dBFS")
+        self.level.valueChanged.connect(self._set_signal_level)
+        controls.addWidget(self.level)
+
+        self.frequency = QtWidgets.QSpinBox()
+        self.frequency.setRange(20, 20_000)
+        self.frequency.setValue(1_000)
+        self.frequency.setSuffix(" Hz")
+        self.frequency.valueChanged.connect(self._set_signal_frequency)
+        controls.addWidget(self.frequency)
+
+        self.signal_button = QtWidgets.QPushButton("Start Signal")
+        self.signal_button.clicked.connect(self.toggle_signal)
+        controls.addWidget(self.signal_button)
+
+        self.noise_button = QtWidgets.QPushButton("Save Noise Floor")
+        self.noise_button.clicked.connect(self.save_noise_snapshot)
+        controls.addWidget(self.noise_button)
+
+        self.rt60_button = QtWidgets.QPushButton("Capture RT60")
+        self.rt60_button.clicked.connect(self.capture_rt60)
+        controls.addWidget(self.rt60_button)
+
+        self.transfer_button = QtWidgets.QPushButton("Save Transfer")
+        self.transfer_button.clicked.connect(self.save_transfer_snapshot)
+        controls.addWidget(self.transfer_button)
 
         grid = pg.GraphicsLayoutWidget()
         layout.addWidget(grid, stretch=1)
@@ -100,7 +147,67 @@ class AnalyzerWindow(QtWidgets.QMainWindow):
     def closeEvent(self, event: object) -> None:
         self.timer.stop()
         self.audio.stop()
+        if self.output is not None:
+            self.output.stop()
         super().closeEvent(event)
+
+    def _set_signal_type(self, signal_type: str) -> None:
+        if self.output is not None:
+            self.output.generator.set_signal_type(signal_type)
+
+    def _set_signal_level(self, value: int) -> None:
+        if self.output is not None:
+            self.output.generator.set_amplitude_dbfs(float(value))
+
+    def _set_signal_frequency(self, value: int) -> None:
+        if self.output is not None:
+            self.output.generator.set_sine_frequency(float(value))
+
+    def toggle_signal(self) -> None:
+        if self.output is None:
+            self.status.setText("No output device selected. Relaunch with --output-device INDEX to generate test signals.")
+            return
+        if self.output.running:
+            self.output.stop()
+            self.signal_button.setText("Start Signal")
+        else:
+            self.output.start()
+            self.signal_button.setText("Stop Signal")
+
+    def _measurement_name(self) -> str:
+        return self.measurement_name.text().strip() or "Room"
+
+    def _mic_samples(self, seconds: float) -> np.ndarray:
+        frame_count = int(seconds * self.analyzer.config.sample_rate)
+        snapshot = self.audio.ring.latest(frame_count)
+        if snapshot.frames.shape[0] == 0:
+            return np.empty(0, dtype=np.float32)
+        channel = 1 if snapshot.frames.shape[1] > 1 else 0
+        return snapshot.frames[:, channel]
+
+    def save_noise_snapshot(self) -> None:
+        samples = self._mic_samples(10.0)
+        spl = compute_spl_metrics(samples, self.analyzer.config.sample_rate, self.analyzer.config.spl_offset_db)
+        paths = save_noise_floor(self._measurement_name(), spl, samples.size / self.analyzer.config.sample_rate, self.analyzer.config.sample_rate)
+        self.status.setText(f"Noise floor saved: {paths.summary}")
+
+    def capture_rt60(self) -> None:
+        if self.output is not None and self.output.running:
+            self.output.stop()
+            self.signal_button.setText("Start Signal")
+        samples = self._mic_samples(8.0)
+        rt60 = estimate_rt60(samples, self.analyzer.config.sample_rate)
+        spl = compute_spl_metrics(samples, self.analyzer.config.sample_rate, self.analyzer.config.spl_offset_db)
+        paths = save_rt60(self._measurement_name(), rt60, spl)
+        rt60_text = "--" if rt60.best is None else f"{rt60.best:.2f} s"
+        self.status.setText(f"RT60 saved: {rt60_text} ({rt60.quality}) -> {paths.summary}")
+
+    def save_transfer_snapshot(self) -> None:
+        if self.last_result is None:
+            self.status.setText("No transfer result available yet.")
+            return
+        paths = save_transfer(self._measurement_name(), self.last_result.transfer)
+        self.status.setText(f"Transfer snapshot saved: {paths.summary}")
 
     def update_plots(self) -> None:
         snapshot = self.audio.ring.latest(self.analyzer.required_frames)
@@ -111,6 +218,7 @@ class AnalyzerWindow(QtWidgets.QMainWindow):
         result = self.analyzer.analyze(snapshot.frames)
         if result is None:
             return
+        self.last_result = result
 
         frequency = result.transfer.frequency
         valid = frequency >= 20.0
@@ -146,6 +254,7 @@ class AnalyzerWindow(QtWidgets.QMainWindow):
 def _parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Open-Smaart real-time transfer analyzer")
     parser.add_argument("--device", help="Input device index or name")
+    parser.add_argument("--output-device", help="Output device index or name for generated test signals")
     parser.add_argument("--sample-rate", type=int, default=48_000)
     parser.add_argument("--block-size", type=int, default=512)
     parser.add_argument(
@@ -173,6 +282,14 @@ def main(argv: list[str] | None = None) -> int:
             device = int(args.device)
         except ValueError:
             device = args.device
+    output_device: int | str | None
+    if args.output_device is None:
+        output_device = None
+    else:
+        try:
+            output_device = int(args.output_device)
+        except ValueError:
+            output_device = args.output_device
 
     audio_config = AudioConfig(sample_rate=args.sample_rate, block_size=args.block_size, device=device)
     if args.check_audio:
@@ -188,9 +305,20 @@ def main(argv: list[str] | None = None) -> int:
 
     analyzer = TransferAnalyzer(AnalyzerConfig(sample_rate=args.sample_rate, spl_offset_db=args.spl_offset_db))
     audio = AudioInputEngine(audio_config)
+    output = None
+    if output_device is not None:
+        output = AudioOutputEngine(
+            SignalGenerator(
+                SignalConfig(
+                    sample_rate=args.sample_rate,
+                    block_size=args.block_size,
+                    device=output_device,
+                )
+            )
+        )
 
     app = QtWidgets.QApplication(sys.argv[:1])
-    window = AnalyzerWindow(audio, analyzer)
+    window = AnalyzerWindow(audio, analyzer, output)
     window.show()
     try:
         window.start()

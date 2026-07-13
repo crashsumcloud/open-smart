@@ -26,6 +26,8 @@
 * Added mic-channel A-weighted SPL metrics with calibration offset support.
 * Added rough RT60 estimation from decay captures using Schroeder reverse integration.
 * Added channel-similarity detection to flag duplicated reference/measurement routing.
+* Added test-signal generator for pink noise, white noise, sine, and log sweep output.
+* Added UI controls for signal type, output level, sine frequency, signal start/stop, noise floor CSV, RT60 CSV, and transfer CSV snapshots.
 
 ### Next Immediate Technical Actions
 * Validate `python -m open_smart.app --list-devices` and live streaming on a machine with a working PortAudio host/audio interface.
@@ -34,6 +36,8 @@
 * Improve coherence by averaging auto/cross spectra across analysis frames instead of using a single-frame estimate.
 * Add a proper RT60 capture button/state machine so the app can freeze and report a deliberate clap/pop/interrupted-noise measurement.
 * Add exportable DSP recommendation reports with frequency, gain, Q, confidence, and "do not boost nulls" safeguards.
+* Replace first-pass RT60 capture with a guided state machine that starts noise, waits for steady state, stops output, then analyzes the decay window.
+* Add octave/third-octave noise-floor export for client-facing acoustic sheets.
 
 ### Discovered Roadblocks & Solutions
 * `gh repo create` needed escalated network access and Git `safe.directory` because the sandbox and Windows user have different repository ownership.

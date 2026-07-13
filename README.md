@@ -30,6 +30,12 @@ Use `--check-audio` to validate a device before opening the GUI:
 python -m open_smart.app --device 45 --check-audio
 ```
 
+To generate test signals, select an output device too. On many USB mixers this appears as `Speakers (USB AUDIO CODEC)`:
+
+```powershell
+python -m open_smart.app --device 4 --output-device 10
+```
+
 ## What the UI Shows
 
 - `Magnitude`: measurement channel divided by reference channel. Use this for room/system tuning when pink noise is playing and coherence is high.
@@ -59,3 +65,28 @@ python -m open_smart.app --device 45 --spl-offset-db 126
 5. Adjust delay until the app reports stable delay and high coherence.
 6. Tune broad trends first with speaker placement, crossover, polarity, level, and gentle shelf EQ.
 7. Use narrow DSP cuts only for repeatable high-coherence peaks. Avoid boosting deep nulls; they are usually placement or cancellation problems.
+
+## Client Measurement Workflows
+
+### Noise Floor
+
+1. Turn off test signal output and keep the room in its normal quiet condition.
+2. Set the measurement name, for example `Boardroom_NoiseFloor`.
+3. Click `Save Noise Floor`.
+4. A CSV is written to `measurements/` with A-weighted SPL, dBFS, peak, duration, and sample rate.
+
+### RT60
+
+1. Select `pink` or `white`, set a conservative output level, and click `Start Signal`.
+2. Let the room reach a steady level.
+3. Click `Capture RT60`; the app stops the signal and analyzes the decay from the mic channel.
+4. A CSV is written to `measurements/` with RT20, RT30, best RT60 estimate, quality, decay range, and measurement SPL.
+
+For better RT60 data, use an interrupted noise burst, balloon pop, clap, or starter pistol. Normal speech is not a valid RT60 test source.
+
+### Transfer Snapshot
+
+1. Use a valid two-channel reference/mic setup.
+2. Confirm coherence is high and channel similarity is not near `1.000`.
+3. Click `Save Transfer`.
+4. A CSV is written to `measurements/` with frequency, magnitude, phase, and coherence.
